@@ -1,51 +1,64 @@
 import numpy as np
 import scipy.io
+from scipy.signal import hilbert, butter, filtfilt
 import matplotlib.pyplot as plt
-from scipy.signal import hilbert
 
 # Load the .mat file
-mat_file = r"C:\Users\ablay\Downloads\LIFU_Anvar.mat"   # Change this to your .mat file path
-data_dict = scipy.io.loadmat(mat_file)
+data = scipy.io.loadmat(r"C:\Users\ablay\Downloads\LIFU_Anvar.mat")
+trials = data['LCN']['trials'][0][0][0:184,:,:]
+n_trials, n_channels, n_timepoints = trials.shape
 
-# Assuming the data is stored under the key 'data'
-# Modify 'data' according to your file's structure
-data = data_dict['AUD']['trials'][0][0][0:184,:,:] # This should be of shape (trials, channels, timepoints)
-
-# Check the shape of the data
-print(f'Data shape: {data.shape}')  # Expecting (n_trials, n_channels, n_timepoints)
-
-# Calculate the ITPC
-trials, channels, timepoints = data.shape
-
-# Initialize the ITPC array
-itpc = np.zeros((channels, timepoints))
+# Define frequency range from 1 to 30 Hz with desired resolution.
+frequencies = np.linspace(1, 30, num=30)  # Example: 1 to 30 Hz with 30 points
+fs = 1000  # Example sampling frequency in Hz
 chnnls=["Mc","Mi","Aud"]
-# Loop over each channel
-for ch in range(channels):
-    # Extract the data for the current channel
-    channel_data = data[:, ch, :]  # Shape: (trials, timepoints)
+# Function to compute ITPC for each frequency
+def compute_itpc(trials, frequencies, fs):
+    n_trials, n_channels, n_timepoints = trials.shape
+    n_frequencies = len(frequencies)
+    itpc = np.zeros((n_channels, n_frequencies, n_timepoints), dtype=np.complex_)
 
-    # Calculate the analytic signal using the fast Fourier transform (FFT)
-    analytic_signal = hilbert(channel_data, axis=0)
+    nyquist = 0.5 * fs  # Nyquist frequency
 
-    # Get the phase of the analytic signal
-    phase = np.angle(analytic_signal)
+    # Loop over each frequency
+    for freq_idx in range(n_frequencies):
+        frequency = frequencies[freq_idx]
+        # Set bandwidth of ±1 Hz
+        low = max(0.01, frequency - 1) / nyquist   # Avoid 0 by using 0.01
+        high = (frequency + 1) / nyquist  # Ensure this is valid
 
-    # Compute the ITPC: Mean of the complex exponentials across trials
-    complex_itpc = np.mean(np.exp(1j * phase), axis=0)
+        # Proceed only if low < high
+        if low >= high:
+            print(f"Skipping frequency {frequency} due to invalid filter bounds: low={low}, high={high}")
+            continue
 
-    # Compute the absolute value of ITPC
-    itpc[ch, :] = np.abs(complex_itpc)
+        # Create a bandpass filter for the current frequency
+        b, a = butter(4, [low, high], btype='band')
 
-# Now you have the ITPC for each channel over time
-# You can visualize the ITPC
-# Example: Plot ITPC for the first channel
-for i in range(3):
+        # Apply the filter and compute the Hilbert transform for each channel and trial
+        for trial in range(n_trials):
+            for channel in range(n_channels):
+                filtered_signal = filtfilt(b, a, trials[trial, channel, :])
+                analytic_signal = hilbert(filtered_signal)
+                phase = np.angle(analytic_signal)
+
+                # Compute the ITPC for this channel and frequency
+                itpc[channel, freq_idx, :] += np.exp(1j * phase)
+
+    # Average across trials and normalize
+    itpc = np.abs(itpc) / n_trials
+    return itpc
+
+# Compute ITPC for the specified frequency range
+itpc = compute_itpc(trials, frequencies, fs)
+
+# Plotting the heatmap for each channel across all computed frequencies
+for channel in range(n_channels):
     plt.figure(figsize=(10, 6))
-    plt.plot(itpc[i, :])
-    plt.title('AUD Intertrial Phase Coherence (ITPC) for Rat_id: 2 '+chnnls[i])
-    plt.xlabel('Timepoints')
-    plt.ylabel('ITPC')
-    plt.grid()
-    
+    plt.imshow(itpc[channel, :, :], aspect='auto', origin='lower', extent=[0, n_timepoints, frequencies[0], frequencies[-1]], cmap='jet',vmin=0, vmax=0.45)
+    plt.colorbar(label='ITPC')
+    plt.title(f'AUD ITPC Rat_id: 2 '+chnnls[channel])
+    plt.xlabel('Time points')
+    plt.ylabel('Frequency (Hz)')
+    plt.tight_layout()
     plt.show()
